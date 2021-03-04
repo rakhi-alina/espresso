@@ -8,7 +8,7 @@ import math
 from argparse import Namespace
 from dataclasses import dataclass, field
 from omegaconf import II
-from typing import Optional, Tuple
+from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -66,7 +66,7 @@ class CtcCriterionConfig(FairseqDataclass):
 class CtcCriterion(FairseqCriterion):
     def __init__(self, cfg: CtcCriterionConfig, task: FairseqTask):
         super().__init__(task)
-        self.blank_idx = task.target_dictionary.index(task.blank_symbol)
+        self.blank_idx = task.target_dictionary.index(task.blank_symbol) if hasattr(task, 'blank_symbol') else 0
         self.pad_idx = task.target_dictionary.pad()
         self.eos_idx = task.target_dictionary.eos()
         self.post_process = cfg.post_process

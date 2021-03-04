@@ -17,10 +17,6 @@ from typing import Callable, Dict, List, Optional
 
 import torch
 import torch.nn.functional as F
-from fairseq.data import iterators
-from fairseq.file_io import PathManager
-from fairseq.logging.meters import safe_round
-from fairseq.modules import gelu, gelu_accurate
 from fairseq.modules.multihead_attention import MultiheadAttention
 from torch import Tensor
 
@@ -51,6 +47,8 @@ class FileContentsAction(argparse.Action):
         super(FileContentsAction, self).__init__(option_strings, dest, **kwargs)
 
     def __call__(self, parser, namespace, values, option_string=None):
+        from fairseq.file_io import PathManager
+
         if PathManager.isfile(values):
             with PathManager.open(values) as f:
                 argument = f.read().strip()
@@ -106,7 +104,7 @@ def move_to_cuda(sample, device=None):
     def _move_to_cuda(tensor):
         # non_blocking is ignored if tensor is not pinned, so we can always set
         # to True (see github.com/PyTorchLightning/pytorch-lightning/issues/620)
-        return tensor.cuda(device=device, non_blocking=True)
+        return tensor.to(device=device, non_blocking=True)
 
     return apply_to_sample(_move_to_cuda, sample)
 
@@ -437,7 +435,7 @@ def import_user_module(args):
     module_path = getattr(args, "user_dir", None)
     if module_path is not None:
         module_path = os.path.abspath(args.user_dir)
-        if not os.path.exists(module_path):
+        if not os.path.exists(module_path) and not os.path.isfile(os.path.dirname(module_path)):
             fairseq_rel_path = os.path.join(os.path.dirname(__file__), args.user_dir)
             if os.path.exists(fairseq_rel_path):
                 module_path = fairseq_rel_path
@@ -482,6 +480,8 @@ def log_softmax(x, dim: int, onnx_trace: bool = False):
 
 
 def get_perplexity(loss, round=2, base=2):
+    from fairseq.logging.meters import safe_round
+
     if loss is None:
         return 0.0
     try:
@@ -497,6 +497,8 @@ def deprecation_warning(message, stacklevel=3):
 
 def get_activation_fn(activation: str) -> Callable:
     """ Returns the activation function corresponding to `activation` """
+    from fairseq.modules import gelu, gelu_accurate
+
     if activation == "relu":
         return F.relu
     elif activation == "gelu":
@@ -631,6 +633,23 @@ def extract_hard_alignment(attn, src_sent, tgt_sent, pad, eos):
     return alignment
 
 
+def extract_soft_alignment(attn, src_sent, tgt_sent, pad, eos):
+    tgt_valid = (
+        ((tgt_sent != pad)).nonzero(as_tuple=False)
+    )
+    src_valid = (
+        ((src_sent != pad)).nonzero(as_tuple=False).squeeze(dim=-1)
+    )
+    alignment = []
+    if len(tgt_valid) != 0 and len(src_valid) != 0:
+        attn_valid = attn[tgt_valid, src_valid]
+        alignment = [
+            ["{:.6f}".format(p) for p in src_probs.tolist()]
+            for src_probs in attn_valid
+        ]
+    return alignment
+
+
 def new_arange(x, *size):
     """
     Return a Tensor of `size` filled with a range function on the device of x.
@@ -648,6 +667,7 @@ def get_tpu_device():
 def tpu_data_loader(itr):
     import torch_xla.core.xla_model as xm
     import torch_xla.distributed.parallel_loader as pl
+    from fairseq.data import iterators
 
     xm.rendezvous("tpu_data_loader")  # wait for all workers
     xm.mark_step()

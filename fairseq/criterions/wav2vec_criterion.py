@@ -102,8 +102,16 @@ class Wav2vecCriterion(FairseqCriterion):
         }
 
         for lk in self.log_keys:
-            if lk in net_output:
-                logging_output[lk] = float((net_output[lk]))
+            # Only store "logits" and "target" for computing MAP and MAUC
+            # during validation
+            if lk == "logits":
+                if not self.training:
+                    logging_output["logits"] = logits.cpu().numpy()
+            elif lk == "target":
+                if not self.training:
+                    logging_output["target"] = target.cpu().numpy()
+            elif lk in net_output:
+                logging_output[lk] = float(net_output[lk])
 
         if len(losses) > 1:
             for i, l in enumerate(losses):
@@ -140,7 +148,7 @@ class Wav2vecCriterion(FairseqCriterion):
         )
 
         metrics.log_scalar(
-            "loss", loss_sum / sample_size / math.log(2), sample_size, round=3
+            "loss", loss_sum / (sample_size or 1) / math.log(2), sample_size, round=3
         )
         metrics.log_scalar("ntokens", ntokens)
         metrics.log_scalar("nsentences", nsentences)
@@ -175,7 +183,7 @@ class Wav2vecCriterion(FairseqCriterion):
                 val = sum(log.get(k, 0) for log in logging_outputs)
                 if k.startswith("loss"):
                     metrics.log_scalar(
-                        k, val / sample_size / math.log(2), sample_size, round=3
+                        k, val / (sample_size or 1) / math.log(2), sample_size, round=3
                     )
                 else:
                     metrics.log_scalar(k, val / len(logging_outputs), round=3)

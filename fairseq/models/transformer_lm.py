@@ -144,6 +144,10 @@ class TransformerLanguageModelConfig(FairseqDataclass):
     checkpoint_activations: bool = field(
         default=False, metadata={"help": "checkpoint activations at each layer"}
     )
+    offload_activations: bool = field(
+        default=False,
+        metadata={"help": "move checkpointed activations to CPU after they are used."},
+    )
     quant_noise_pq: float = field(
         default=0.0,
         metadata={"help": "iterative PQ quantization noise at training time"},
@@ -172,6 +176,9 @@ class TransformerLanguageModel(FairseqLanguageModel):
         def moses_fastbpe(path):
             return {"path": path, "tokenizer": "moses", "bpe": "fastbpe"}
 
+        def spm(path):
+            return {"path": path, "tokenizer": "space", "bpe": "sentencepiece"}
+
         return {
             "transformer_lm.gbw.adaptive_huge": "https://dl.fbaipublicfiles.com/fairseq/models/lm/adaptive_lm_gbw_huge.tar.bz2",
             "transformer_lm.wiki103.adaptive": "https://dl.fbaipublicfiles.com/fairseq/models/lm/adaptive_lm_wiki103.v2.tar.bz2",
@@ -183,6 +190,18 @@ class TransformerLanguageModel(FairseqLanguageModel):
             ),
             "transformer_lm.wmt19.ru": moses_fastbpe(
                 "https://dl.fbaipublicfiles.com/fairseq/models/lm/wmt19.ru.tar.bz2"
+            ),
+            "transformer_lm.wmt20.en": spm(
+                "https://dl.fbaipublicfiles.com/fairseq/models/lm/wmt20.en.tar.gz"
+            ),
+            "transformer_lm.wmt20.ta": spm(
+                "https://dl.fbaipublicfiles.com/fairseq/models/lm/wmt20.ta.tar.gz"
+            ),
+            "transformer_lm.wmt20.iu.news": spm(
+                "https://dl.fbaipublicfiles.com/fairseq/models/lm/wmt20.iu.news.tar.gz"
+            ),
+            "transformer_lm.wmt20.iu.nh": spm(
+                "https://dl.fbaipublicfiles.com/fairseq/models/lm/wmt20.iu.nh.tar.gz"
             ),
         }
 
@@ -307,6 +326,9 @@ def base_lm_architecture(args):
     args.no_scale_embedding = getattr(args, "no_scale_embedding", False)
     args.layernorm_embedding = getattr(args, "layernorm_embedding", False)
     args.checkpoint_activations = getattr(args, "checkpoint_activations", False)
+    args.offload_activations = getattr(args, "offload_activations", False)
+    if args.offload_activations:
+        args.checkpoint_activations = True
 
 
 @register_model_architecture("transformer_lm", "transformer_lm_big")
@@ -366,6 +388,18 @@ def transformer_lm_gpt2_small(args):
     args.decoder_ffn_embed_dim = getattr(args, "decoder_ffn_embed_dim", 4096)
     args.decoder_layers = getattr(args, "decoder_layers", 24)
     args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 16)
+    args.dropout = getattr(args, "dropout", 0.1)
+    args.attention_dropout = getattr(args, "attention_dropout", 0.1)
+    args.activation_fn = getattr(args, "activation_fn", "gelu")
+    base_lm_architecture(args)
+
+
+@register_model_architecture("transformer_lm", "transformer_lm_gpt2_tiny")
+def transformer_lm_gpt2_tiny(args):
+    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 64)
+    args.decoder_ffn_embed_dim = getattr(args, "decoder_ffn_embed_dim", 64)
+    args.decoder_layers = getattr(args, "decoder_layers", 2)
+    args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 1)
     args.dropout = getattr(args, "dropout", 0.1)
     args.attention_dropout = getattr(args, "attention_dropout", 0.1)
     args.activation_fn = getattr(args, "activation_fn", "gelu")
