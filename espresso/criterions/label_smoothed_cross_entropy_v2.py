@@ -11,11 +11,12 @@ import torch
 
 from fairseq import utils
 from fairseq.criterions import register_criterion
-from fairseq.criterions.label_smoothed_cross_entropy import LabelSmoothedCrossEntropyCriterion
+from fairseq.criterions.label_smoothed_cross_entropy import (
+    LabelSmoothedCrossEntropyCriterion,
+    LabelSmoothedCrossEntropyCriterionConfig,
+)
 from fairseq.data import data_utils
-from fairseq.dataclass import ChoiceEnum, FairseqDataclass
-from fairseq.dataclass.utils import gen_parser_from_dataclass
-from omegaconf import II
+from fairseq.dataclass import ChoiceEnum
 
 
 logger = logging.getLogger(__name__)
@@ -25,26 +26,7 @@ LABEL_SMOOTHING_CHOICES = ChoiceEnum(["uniform", "unigram", "temporal"])
 
 
 @dataclass
-class LabelSmoothedCrossEntropyV2CriterionConfig(FairseqDataclass):
-    sentence_avg: bool = II("optimization.sentence_avg")
-    label_smoothing: float = field(
-        default=0.0,
-        metadata={
-            "help": "epsilon for label smoothing, 0 means no label smoothing"
-        },
-    )
-    report_accuracy: bool = field(
-        default=False,
-        metadata={
-            "help": "report accuracy metric"
-        },
-    )
-    ignore_prefix_size: bool = field(
-        default=False,
-        metadata={
-            "help": "ignore first N tokens"
-        },
-    )
+class LabelSmoothedCrossEntropyV2CriterionConfig(LabelSmoothedCrossEntropyCriterionConfig):
     print_training_sample_interval: int = field(
         default=500,
         metadata={
@@ -117,8 +99,11 @@ def label_smoothed_nll_loss(
     if reduce:
         nll_loss = nll_loss.sum()
         smooth_loss = smooth_loss.sum()
-    eps_i = epsilon / lprobs.size(-1) if smoothing_type == "uniform" else epsilon
-    loss = (1.0 - epsilon) * nll_loss + eps_i * smooth_loss
+    if smoothing_type == "uniform":
+        eps_i = epsilon / (lprobs.size(-1) - 1)
+        loss = (1.0 - epsilon - eps_i) * nll_loss + eps_i * smooth_loss
+    else:
+        loss = (1.0 - epsilon) * nll_loss + epsilon * smooth_loss
     return loss, nll_loss
 
 
@@ -151,13 +136,6 @@ class LabelSmoothedCrossEntropyV2Criterion(LabelSmoothedCrossEntropyCriterion):
             self.unigram_tensor += unigram_pseudo_count  # for further backoff
             self.unigram_tensor.div_(self.unigram_tensor.sum())
         self.prev_num_updates = -1
-
-    @classmethod
-    def add_args(cls, parser):
-        """Add criterion-specific arguments to the parser."""
-        dc = getattr(cls, "__dataclass", None)
-        if dc is not None:
-            gen_parser_from_dataclass(parser, dc())
 
     def forward(self, model, sample, reduce=True):
         """Compute the loss for the given sample; periodically print out
@@ -199,9 +177,8 @@ class LabelSmoothedCrossEntropyV2Criterion(LabelSmoothedCrossEntropyCriterion):
             assert pred.size() == target.size()
             with data_utils.numpy_seed(model.num_updates):
                 i = np.random.randint(0, len(sample["id"]))
-            ref_tokens = sample["target_raw_text"][i]
             length = utils.strip_pad(target.data[i], self.padding_idx).size(0)
-            ref_one = self.dictionary.wordpiece_decode(ref_tokens)
+            ref_one = sample["text"][i]
             pred_one = self.dictionary.wordpiece_decode(self.dictionary.string(pred.data[i][:length]))
             logger.info("sample REF: " + ref_one)
             logger.info("sample PRD: " + pred_one)

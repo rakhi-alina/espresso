@@ -12,6 +12,7 @@ from fairseq import search, utils
 from fairseq.data import data_utils
 from fairseq.models import FairseqIncrementalDecoder
 from torch import Tensor
+from fairseq.ngram_repeat_block import NGramRepeatBlock
 
 from espresso.models.external_language_model import RawOutExternalLanguageModelBase
 
@@ -87,7 +88,12 @@ class SequenceGenerator(nn.Module):
         self.unk_penalty = unk_penalty
         self.temperature = temperature
         self.match_source_len = match_source_len
-        self.no_repeat_ngram_size = no_repeat_ngram_size
+
+        if no_repeat_ngram_size > 0:
+            self.repeat_ngram_blocker = NGramRepeatBlock(no_repeat_ngram_size)
+        else:
+            self.repeat_ngram_blocker = None
+
         self.eos_factor = kwargs.get("eos_factor", None)
         assert temperature > 0, "--temperature must be greater than 0"
         assert self.eos_factor is None or self.eos_factor >= 1.0, "--eos-factor must be >= 1.0 if set"
@@ -220,7 +226,7 @@ class SequenceGenerator(nn.Module):
             raise Exception("expected src_tokens or source in net input")
 
         # bsz: total number of sentences in beam
-        # Note that src_tokens may have more than 2 dimenions (i.e. audio features)
+        # Note that src_tokens may have more than 2 dimensions (i.e. audio features)
         bsz, src_len = src_tokens.size()[:2]
         beam_size = self.beam_size
 
@@ -290,8 +296,13 @@ class SequenceGenerator(nn.Module):
         cand_size = 2 * beam_size  # 2 x beam size in case half are EOS
 
         # offset arrays for converting between different indexing schemes
-        bbsz_offsets = (torch.arange(0, bsz) * beam_size).unsqueeze(1).type_as(tokens)
-        cand_offsets = torch.arange(0, cand_size).type_as(tokens)
+        bbsz_offsets = (
+            (torch.arange(0, bsz) * beam_size)
+            .unsqueeze(1)
+            .type_as(tokens)
+            .to(src_tokens.device)
+        )
+        cand_offsets = torch.arange(0, cand_size).type_as(tokens).to(src_tokens.device)
 
         reorder_state: Optional[Tensor] = None
         batch_idxs: Optional[Tensor] = None
@@ -388,8 +399,8 @@ class SequenceGenerator(nn.Module):
             if self.should_set_src_lengths:
                 self.search.set_src_lengths(src_lengths)
 
-            if self.no_repeat_ngram_size > 0:
-                lprobs = self._no_repeat_ngram(tokens, lprobs, bsz, beam_size, step)
+            if self.repeat_ngram_blocker is not None:
+                lprobs = self.repeat_ngram_blocker(tokens, lprobs, bsz, beam_size, step)
 
             # Shape: (batch, cand_size)
             cand_scores, cand_indices, cand_beams = self.search.step(
@@ -733,62 +744,6 @@ class SequenceGenerator(nn.Module):
             return True
         return False
 
-    def calculate_banned_tokens(
-        self,
-        tokens,
-        step: int,
-        gen_ngrams: List[Dict[str, List[int]]],
-        no_repeat_ngram_size: int,
-        bbsz_idx: int,
-    ):
-        tokens_list: List[int] = tokens[
-            bbsz_idx, step + 2 - no_repeat_ngram_size : step + 1
-        ].tolist()
-        # before decoding the next token, prevent decoding of ngrams that have already appeared
-        ngram_index = ",".join([str(x) for x in tokens_list])
-        return gen_ngrams[bbsz_idx].get(ngram_index, torch.jit.annotate(List[int], []))
-
-    def transpose_list(self, l: List[List[int]]):
-        # GeneratorExp aren't supported in TS so ignoring the lint
-        min_len = min([len(x) for x in l])  # noqa
-        l2 = [[row[i] for row in l] for i in range(min_len)]
-        return l2
-
-    def _no_repeat_ngram(self, tokens, lprobs, bsz: int, beam_size: int, step: int):
-        # for each beam and batch sentence, generate a list of previous ngrams
-        gen_ngrams: List[Dict[str, List[int]]] = [
-            torch.jit.annotate(Dict[str, List[int]], {})
-            for bbsz_idx in range(bsz * beam_size)
-        ]
-        cpu_tokens = tokens.cpu()
-        for bbsz_idx in range(bsz * beam_size):
-            gen_tokens: List[int] = cpu_tokens[bbsz_idx].tolist()
-            for ngram in self.transpose_list(
-                [gen_tokens[i:] for i in range(self.no_repeat_ngram_size)]
-            ):
-                key = ",".join([str(x) for x in ngram[:-1]])
-                gen_ngrams[bbsz_idx][key] = gen_ngrams[bbsz_idx].get(
-                    key, torch.jit.annotate(List[int], [])
-                ) + [ngram[-1]]
-
-        if step + 2 - self.no_repeat_ngram_size >= 0:
-            # no banned tokens if we haven't generated no_repeat_ngram_size tokens yet
-            banned_tokens = [
-                self.calculate_banned_tokens(
-                    tokens, step, gen_ngrams, self.no_repeat_ngram_size, bbsz_idx
-                )
-                for bbsz_idx in range(bsz * beam_size)
-            ]
-        else:
-            banned_tokens = [
-                torch.jit.annotate(List[int], []) for bbsz_idx in range(bsz * beam_size)
-            ]
-        for bbsz_idx in range(bsz * beam_size):
-            lprobs[bbsz_idx][
-                torch.tensor(banned_tokens[bbsz_idx]).long()
-            ] = torch.tensor(-math.inf).to(lprobs)
-        return lprobs
-
 
 class EnsembleModel(nn.Module):
     """A wrapper around an ensemble of models."""
@@ -891,7 +846,9 @@ class EnsembleModel(nn.Module):
         return avg_probs, avg_attn
 
     @torch.jit.export
-    def reorder_encoder_out(self, encoder_outs: Optional[List[Dict[str, List[Tensor]]]], new_order):
+    def reorder_encoder_out(
+        self, encoder_outs: Optional[List[Dict[str, List[Tensor]]]], new_order
+    ):
         """
         Reorder encoder output according to *new_order*.
 
@@ -927,7 +884,9 @@ class EnsembleModel(nn.Module):
 
 
 class SequenceGeneratorWithAlignment(SequenceGenerator):
-    def __init__(self, models, tgt_dict, left_pad_target=False, **kwargs):
+    def __init__(
+        self, models, tgt_dict, left_pad_target=False, print_alignment="hard", **kwargs
+    ):
         """Generates translations of a given source sentence.
 
         Produces alignments following "Jointly Learning to Align and
@@ -940,6 +899,11 @@ class SequenceGeneratorWithAlignment(SequenceGenerator):
         """
         super().__init__(EnsembleModelWithAlignment(models), tgt_dict, **kwargs)
         self.left_pad_target = left_pad_target
+
+        if print_alignment == "hard":
+            self.extract_alignment = utils.extract_hard_alignment
+        elif print_alignment == "soft":
+            self.extract_alignment = utils.extract_soft_alignment
 
     @torch.no_grad()
     def generate(self, models, sample, **kwargs):
@@ -969,7 +933,7 @@ class SequenceGeneratorWithAlignment(SequenceGenerator):
 
         # Process the attn matrix to extract hard alignments.
         for i in range(bsz * beam_size):
-            alignment = utils.extract_hard_alignment(
+            alignment = self.extract_alignment(
                 attn[i], src_tokens[i], tgt_tokens[i], self.pad, self.eos
             )
             finalized[i // beam_size][i % beam_size]["alignment"] = alignment

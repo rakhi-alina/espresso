@@ -12,6 +12,7 @@ from torch import Tensor
 import torch.nn.functional as F
 
 from fairseq import utils
+from fairseq.distributed import fsdp_wrap
 from fairseq.models import (
     FairseqEncoderModel,
     register_model,
@@ -26,6 +27,9 @@ import espresso.tools.utils as speech_utils
 
 
 DEFAULT_MAX_SOURCE_POSITIONS = 10240
+
+
+DEFAULT_MIN_PARAMS_TO_WRAP = int(1e8)
 
 
 logger = logging.getLogger(__name__)
@@ -76,6 +80,8 @@ class SpeechTransformerEncoderModel(FairseqEncoderModel):
         parser.add_argument("--checkpoint-activations", action="store_true",
                             help="checkpoint activations at each layer, which saves GPU "
                                  "memory usage at the cost of some additional compute")
+        parser.add_argument("--offload-activations", action="store_true",
+                             help="checkpoint activations at each layer, then save to gpu. Sets --checkpoint-activations.")
         # args for "Reducing Transformer Depth on Demand with Structured Dropout" (Fan et al., 2019)
         parser.add_argument("--encoder-layerdrop", type=float, metavar="D", default=0,
                             help="LayerDrop probability for encoder")
@@ -88,6 +94,18 @@ class SpeechTransformerEncoderModel(FairseqEncoderModel):
                             help="block size of quantization noise at training time")
         parser.add_argument("--quant-noise-scalar", type=float, metavar="D", default=0,
                             help="scalar quantization noise and scalar quantization at training time")
+        # args for Fully Sharded Data Parallel (FSDP) training
+        parser.add_argument(
+            "--min-params-to-wrap", type=int, metavar="D", default=DEFAULT_MIN_PARAMS_TO_WRAP,
+            help=(
+                "minimum number of params for a layer to be wrapped with FSDP() when "
+                "training with --ddp-backend=fully_sharded. Smaller values will "
+                "improve memory efficiency, but may make torch.distributed "
+                "communication less efficient due to smaller input sizes. This option "
+                "is set to 0 (i.e., always wrap) when --checkpoint-activations or "
+                "--offload-activations are passed."
+            )
+        )
         # fmt: on
 
     @classmethod
@@ -102,6 +120,9 @@ class SpeechTransformerEncoderModel(FairseqEncoderModel):
 
         if getattr(args, "max_source_positions", None) is None:
             args.max_source_positions = DEFAULT_MAX_SOURCE_POSITIONS
+
+        if getattr(args, "offload_activations", False):
+            args.checkpoint_activations = True  # offloading implies checkpointing
 
         out_channels = speech_utils.eval_str_nested_list_or_tuple(args.encoder_conv_channels, type=int)
         kernel_sizes = speech_utils.eval_str_nested_list_or_tuple(args.encoder_conv_kernel_sizes, type=int)
@@ -150,6 +171,8 @@ class SpeechTransformerEncoderModel(FairseqEncoderModel):
             chunk_left_context=getattr(task, "chunk_left_context", 0),
             training_stage=getattr(task, "training_stage", True),
         )
+        # fsdp_wrap is a no-op when --ddp-backend != fully_sharded
+        encoder = fsdp_wrap(encoder, min_num_params=1e8)
         return cls(args, encoder, state_prior=getattr(task, "initial_state_prior", None))
 
     def set_num_updates(self, num_updates):
@@ -265,7 +288,7 @@ class SpeechChunkTransformerEncoder(SpeechTransformerEncoder):
                 intermediate hidden states (default: False).
 
         Returns:
-            namedtuple:
+            dict:
                 - **encoder_out** (Tensor): the last encoder layer's output of
                   shape `(src_len, batch, embed_dim)`
                 - **encoder_padding_mask** (ByteTensor): the positions of
@@ -385,7 +408,9 @@ def base_architecture(args):
     args.adaptive_input = getattr(args, "adaptive_input", False)
     args.layernorm_embedding = getattr(args, "layernorm_embedding", False)
     args.checkpoint_activations = getattr(args, "checkpoint_activations", False)
-
+    args.offload_activations = getattr(args, "offload_activations", False)
+    if args.offload_activations:
+        args.checkpoint_activations = True
     args.encoder_layers_to_keep = getattr(args, "encoder_layers_to_keep", None)
     args.encoder_layerdrop = getattr(args, "encoder_layerdrop", 0)
     args.quant_noise_pq = getattr(args, "quant_noise_pq", 0)

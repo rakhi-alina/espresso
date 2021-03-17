@@ -92,21 +92,23 @@ def collate(
     else:
         ntokens = src_lengths.sum().item()
 
-    target_raw_text = None
-    if samples[0].get("target_raw_text", None) is not None:
-        target_raw_text = [samples[i]["target_raw_text"] for i in sort_order.numpy()]
+    token_text = None
+    if samples[0].get("token_text", None) is not None:
+        token_text = [samples[i]["token_text"] for i in sort_order.numpy()]
+
+    text = None
+    if samples[0].get("text", None) is not None:
+        text = [samples[i]["text"] for i in sort_order.numpy()]
 
     batch = {
         "id": id,
         "utt_id": utt_id,
         "nsentences": len(samples),
         "ntokens": ntokens,
-        "net_input": {
-            "src_tokens": src_frames,
-            "src_lengths": src_lengths,
-        },
+        "net_input": {"src_tokens": src_frames, "src_lengths": src_lengths},
         "target": target,
-        "target_raw_text": target_raw_text,
+        "token_text": token_text,
+        "text": text,
     }
     if prev_output_tokens is not None:
         batch["net_input"]["prev_output_tokens"] = prev_output_tokens.index_select(
@@ -120,7 +122,7 @@ def collate(
         constraints = torch.zeros((len(samples), max(lens))).long()
         for i, sample in enumerate(samples):
             constraints[i, 0: lens[i]] = samples[i].get("constraints")
-        batch["constraints"] = constraints
+        batch["constraints"] = constraints.index_select(0, sort_order)
 
     return batch
 
@@ -219,7 +221,7 @@ class AsrDataset(FairseqDataset):
 
             # determine bucket sizes using self.num_tokens, which will return
             # the padded lengths (thanks to FeatBucketPadLengthDataset)
-            num_tokens = np.vectorize(self.num_tokens, otypes=[np.long])
+            num_tokens = np.vectorize(self.num_tokens, otypes=[np.compat.long])
             self.bucketed_num_tokens = num_tokens(np.arange(len(self.src)))
             self.buckets = [
                 (None, num_tokens) for num_tokens in np.unique(self.bucketed_num_tokens)
@@ -256,14 +258,16 @@ class AsrDataset(FairseqDataset):
 
     def __getitem__(self, index):
         tgt_item = self.tgt[index][0] if self.tgt is not None else None
-        raw_text_item = self.tgt[index][1] if self.tgt is not None else None
+        token_text_item = self.tgt[index][1] if self.tgt is not None else None
+        text_item = self.tgt[index][2] if self.tgt is not None else None
         src_item = self.src[index]
         example = {
             "id": index,
             "utt_id": self.src.utt_ids[index],
             "source": src_item,
             "target": tgt_item,
-            "target_raw_text": raw_text_item,
+            "token_text": token_text_item,
+            "text": text_item,
         }
         if self.constraints is not None:
             example["constraints"] = self.constraints[index]
@@ -307,7 +311,8 @@ class AsrDataset(FairseqDataset):
                 - `target` (LongTensor): a padded 2D Tensor of tokens in the
                   target sentence of shape `(bsz, tgt_len)`. Padding will appear
                   on the left if *left_pad_target* is ``True``.
-                - `target_raw_text` (List[str]): list of original text
+                - `token_text` (List[str]): list of token text
+                - `text` (List[str]): list of original text
                 - `tgt_lang_id` (LongTensor): a long Tensor which contains target language
                   IDs of each sample in the batch
         """
@@ -339,6 +344,12 @@ class AsrDataset(FairseqDataset):
         """Return the number of frames in a sample. This value is used to
         enforce ``--max-tokens`` during batching."""
         return self.src_sizes[index]
+
+    def num_tokens_vec(self, indices):
+        """Return the number of tokens for a set of positions defined by indices.
+        This value is used to enforce ``--max-tokens`` during batching."""
+        sizes = self.src_sizes[indices]
+        return sizes
 
     def size(self, index):
         """Return an example's size as a float or tuple. This value is used when
@@ -388,10 +399,7 @@ class AsrDataset(FairseqDataset):
             list: list of removed indices
         """
         return data_utils.filter_paired_dataset_indices_by_size(
-            self.src_sizes,
-            self.tgt_sizes,
-            indices,
-            max_sizes,
+            self.src_sizes, self.tgt_sizes, indices, max_sizes,
         )
 
     @property

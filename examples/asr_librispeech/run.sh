@@ -204,18 +204,18 @@ fi
 if [ ${stage} -le 7 ]; then
   echo "Stage 7: Dump Json Files"
   train_feat=$train_feat_dir/feats.scp
-  train_token_text=data/$train_set/token_text
+  train_text=data/$train_set/text
   train_utt2num_frames=data/$train_set/utt2num_frames
   valid_feat=$valid_feat_dir/feats.scp
-  valid_token_text=data/$valid_set/token_text
+  valid_text=data/$valid_set/text
   valid_utt2num_frames=data/$valid_set/utt2num_frames
-  asr_prep_json.py --feat-files $train_feat --token-text-files $train_token_text --utt2num-frames-files $train_utt2num_frames --output data/train.json
-  asr_prep_json.py --feat-files $valid_feat --token-text-files $valid_token_text --utt2num-frames-files $valid_utt2num_frames --output data/valid.json
+  asr_prep_json.py --feat-files $train_feat --text-files $train_text --utt2num-frames-files $train_utt2num_frames --output data/train.json
+  asr_prep_json.py --feat-files $valid_feat --text-files $valid_text --utt2num-frames-files $valid_utt2num_frames --output data/valid.json
   for dataset in $test_set; do
     feat=${dumpdir}/$dataset/delta${do_delta}/feats.scp
-    token_text=data/$dataset/token_text
+    text=data/$dataset/text
     utt2num_frames=data/$dataset/utt2num_frames
-    asr_prep_json.py --feat-files $feat --token-text-files $token_text --utt2num-frames-files $utt2num_frames --output data/$dataset.json
+    asr_prep_json.py --feat-files $feat --text-files $text --utt2num-frames-files $utt2num_frames --output data/$dataset.json
   done
 fi
 
@@ -248,7 +248,7 @@ if [ ${stage} -le 8 ]; then
   CUDA_VISIBLE_DEVICES=$free_gpu speech_train.py data --task speech_recognition_espresso --seed 1 \
     --log-interval $((8000/ngpus/update_freq)) --log-format simple --print-training-sample-interval $((4000/ngpus/update_freq)) \
     --num-workers 0 --data-buffer-size 0 --max-tokens 26000 --batch-size 24 --curriculum 1 --empty-cache-freq 50 \
-    --valid-subset $valid_subset --batch-size-valid 48 --ddp-backend no_c10d --update-freq $update_freq \
+    --valid-subset $valid_subset --batch-size-valid 48 --ddp-backend legacy_ddp --update-freq $update_freq \
     --distributed-world-size $ngpus \
     --optimizer adam --lr 0.001 --weight-decay 0.0 --clip-norm 2.0 \
     --save-dir $dir --restore-file checkpoint_last.pt --save-interval-updates $((6000/ngpus/update_freq)) \

@@ -34,7 +34,8 @@ We provide reference implementations of various sequence modeling papers:
   + [Understanding Back-Translation at Scale (Edunov et al., 2018)](examples/backtranslation/README.md)
   + [Adaptive Input Representations for Neural Language Modeling (Baevski and Auli, 2018)](examples/language_model/README.adaptive_inputs.md)
   + [Lexically constrained decoding with dynamic beam allocation (Post & Vilar, 2018)](examples/constrained_decoding/README.md)
-  + [Transformer-XL: Attentive Language Models Beyond a Fixed-Length Context](examples/truncated_bptt/README.md)
+  + [Transformer-XL: Attentive Language Models Beyond a Fixed-Length Context (Dai et al., 2019)](examples/truncated_bptt/README.md)
+  + [Adaptive Attention Span in Transformers (Sukhbaatar et al., 2019)](examples/adaptive_span/README.md)
   + [Mixture Models for Diverse Machine Translation: Tricks of the Trade (Shen et al., 2019)](examples/translation_moe/README.md)
   + [RoBERTa: A Robustly Optimized BERT Pretraining Approach (Liu et al., 2019)](examples/roberta/README.md)
   + [Facebook FAIR's WMT19 News Translation Task Submission (Ng et al., 2019)](examples/wmt19/README.md)
@@ -60,20 +61,24 @@ We provide reference implementations of various sequence modeling papers:
 
 ### What's New:
 
+* March 2021 [Added full parameter and optimizer state sharding + CPU offloading](examples/fully_sharded_data_parallel/README.md)
+* February 2021 [Added LASER training code](examples/laser/README.md)
+* December 2020: [Added Adaptive Attention Span code](examples/adaptive_span/README.md)
+* December 2020: [GottBERT model and code released](examples/gottbert/README.md)
 * November 2020: Adopted the [Hydra](https://github.com/facebookresearch/hydra) configuration framework
   * [see documentation explaining how to use it for new and existing projects](docs/hydra_integration.md)
 * November 2020: [fairseq 0.10.0 released](https://github.com/pytorch/fairseq/releases/tag/v0.10.0)
 * October 2020: [Added R3F/R4F (Better Fine-Tuning) code](examples/rxf/README.md)
 * October 2020: [Deep Transformer with Latent Depth code released](examples/latent_depth/README.md)
 * October 2020: [Added CRISS models and code](examples/criss/README.md)
+
+<details><summary>Previous updates</summary><p>
+
 * September 2020: [Added Linformer code](examples/linformer/README.md)
 * September 2020: [Added pointer-generator networks](examples/pointer_generator/README.md)
 * August 2020: [Added lexically constrained decoding](examples/constrained_decoding/README.md)
 * August 2020: [wav2vec2 models and code released](examples/wav2vec/README.md)
 * July 2020: [Unsupervised Quality Estimation code released](examples/unsupervised_quality_estimation/README.md)
-
-<details><summary>Previous updates</summary><p>
-
 * May 2020: [Follow fairseq on Twitter](https://twitter.com/fairseq)
 * April 2020: [Monotonic Multihead Attention code released](examples/simultaneous_translation/README.md)
 * April 2020: [Quant-Noise code released](examples/quant_noise/README.md)
@@ -106,6 +111,8 @@ We provide reference implementations of various sequence modeling papers:
 * [mixed precision training](https://fairseq.readthedocs.io/en/latest/getting_started.html#training-with-half-precision-floating-point-fp16) (trains faster with less GPU memory on [NVIDIA tensor cores](https://developer.nvidia.com/tensor-cores))
 * [extensible](https://fairseq.readthedocs.io/en/latest/overview.html): easily register new models, criterions, tasks, optimizers and learning rate schedulers
 * [flexible configuration](docs/hydra_integration.md) based on [Hydra](https://github.com/facebookresearch/hydra) allowing a combination of code, command-line and file based configuration
+* [full parameter and optimizer state sharding](examples/fully_sharded_data_parallel/README.md)
+* [offloading parameters to CPU](examples/fully_sharded_data_parallel/README.md)
 
 We also provide [pre-trained models for translation and language modeling](#pre-trained-models-and-examples)
 with a convenient `torch.hub` interface:
@@ -134,8 +141,8 @@ pip install --editable ./
 # on MacOS:
 # CFLAGS="-stdlib=libc++" pip install --editable ./
 
-# to install the latest stable release (0.10.0)
-# pip install fairseq==0.10.0
+# to install the latest stable release (0.10.x)
+# pip install fairseq
 ```
 
 * **For faster training** install NVIDIA's [apex](https://github.com/NVIDIA/apex) library:
